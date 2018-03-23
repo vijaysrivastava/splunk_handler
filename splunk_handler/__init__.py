@@ -119,6 +119,10 @@ class SplunkHandler(logging.Handler):
         if self.flush_interval > 0:
             try:
                 self.write_debug_log("Writing record to log queue")
+
+                # Check if worker thread is created. If not create it.
+                self._validate_worker_thread()
+
                 # Put log message into queue; worker thread will pick up
                 self.queue.put_nowait(record)
             except Full:
@@ -274,3 +278,20 @@ class SplunkHandler(logging.Handler):
         self.write_debug_log("Starting up the final run of the worker thread before shutdown")
         # Send the remaining items that might be sitting in queue.
         self._splunk_worker()
+
+    def _validate_worker_thread(self):
+        """
+        Cancel current timer and recreate it.
+        Note: In some cases, like in gunicorn, worker process are spawned by forking parent process. In that case original
+        timer threads would be attached to parent process and not to the spawned worker process. Gunicorn, however emit logs
+        in the worker process but since timer threads(or splunk workers) are running in the main process, they won't get  any
+        message in the queue. As a result message are not sent to splunk. As a workaround, we can recreate the timer in the
+        worker process when the emit statement come.
+        """
+        try:
+            if not self.timer.isAlive():
+                self.timer.cancel()
+                self.start_worker_thread()
+        except Exception as e:
+            self.write_log("Exception in validating or restarting splunk worker thread: %s" % str(e))
+
